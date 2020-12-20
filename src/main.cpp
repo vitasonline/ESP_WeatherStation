@@ -27,9 +27,9 @@ const char* const jsonPressure PROGMEM = "pressure";
 const char* const jsonHumidity PROGMEM = "humidity";
 #endif
 
-class ESPBaro : public ESPWebMQTTBase {
+class ESPWeatherStation : public ESPWebMQTTBase {
 public:
-  ESPBaro();
+  ESPWeatherStation();
 protected:
   void setupExtra();
   void loopExtra();
@@ -54,7 +54,7 @@ private:
  * ESPWebBaro class implementation
  */
 
-ESPBaro::ESPBaro() : ESPWebMQTTBase() {
+ESPWeatherStation::ESPWeatherStation() : ESPWebMQTTBase() {
 #if defined(BMP085)
   bm = new Adafruit_BMP085();
 #elif defined(BMP280)
@@ -64,12 +64,12 @@ ESPBaro::ESPBaro() : ESPWebMQTTBase() {
 #endif
 }
 
-void ESPBaro::setupExtra() {
+void ESPWeatherStation::setupExtra() {
   ESPWebMQTTBase::setupExtra();
   bm->begin();
 }
 
-void ESPBaro::loopExtra() {
+void ESPWeatherStation::loopExtra() {
   const uint32_t timeout = 2000; // 2 sec.
   static uint32_t nextTime;
 
@@ -102,7 +102,7 @@ void ESPBaro::loopExtra() {
   }
 }
 
-void ESPBaro::handleRootPage() {
+void ESPWeatherStation::handleRootPage() {
   String script = F("function refreshData() {\n\
 var request = new XMLHttpRequest();\n\
 request.open('GET', '");
@@ -173,7 +173,7 @@ Pressure: <span id=\"");
   httpServer->send(200, FPSTR(textHtml), page);
 }
 
-String ESPBaro::jsonData() {
+String ESPWeatherStation::jsonData() {
   String result = ESPWebMQTTBase::jsonData();
   result += F(",\"");
   result += FPSTR(jsonTemperature);
@@ -193,7 +193,7 @@ String ESPBaro::jsonData() {
   return result;
 }
 
-ESPBaro* app = new ESPBaro();
+ESPWeatherStation* app = new ESPWeatherStation();
 
 void setup() {
   Serial.begin(115200);
