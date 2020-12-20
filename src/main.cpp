@@ -67,6 +67,7 @@ ESPWeatherStation::ESPWeatherStation() : ESPWebMQTTBase() {
 void ESPWeatherStation::setupExtra() {
   ESPWebMQTTBase::setupExtra();
   bm->begin();
+  
 }
 
 void ESPWeatherStation::loopExtra() {
