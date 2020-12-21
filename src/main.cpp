@@ -62,6 +62,7 @@ const char* const jsonPressure PROGMEM = "pressure";
 #if defined(BME280)
 const char* const jsonHumidity PROGMEM = "humidity";
 #endif
+const char* const jsonTestString PROGMEM = "teststring";
 
 class ESPWeatherStation : public ESPWebMQTTBase {
 public:
@@ -176,13 +177,16 @@ void ESPWeatherStation::loopExtra() {
     Serial.print(CH);
     Serial.print(" Temperature=");
     unsigned long T = (myData1 >> 8) & 0xFFF; // Get Temperature
-    Serial.print(T/10.0,1);
+    int Temperarure;
+    if (T > 2047) Temperarure = T - 4096;
+    else Temperarure = T;
+    Serial.print(Temperarure/10.0,1);
     Serial.print("C Humidity=");
     byte H = (myData1 >> 0) & 0xFF;       // Get LLLL
     Serial.print(H);
     Serial.println("%");
 
-    if (pubSubClient->connected()) {
+    if (pubSubClient->connected() && ID != 0 ) {
       String path, topic;
 
       if (_mqttClient != strEmpty) {
@@ -193,7 +197,7 @@ void ESPWeatherStation::loopExtra() {
       path += CH;
       path += charSlash;
       topic = path + FPSTR(jsonTemperature);
-      mqttPublish(topic, String(T/10.0));
+      mqttPublish(topic, String(Temperarure/10.0));
       topic = path + FPSTR(jsonHumidity);
       mqttPublish(topic, String(H));
     }
@@ -244,7 +248,7 @@ request.send(null);\n\
 }\n\
 setInterval(refreshData, 1000);\n");
 
-  String page = ESPWebBase::webPageStart(F("BMx280"));
+  String page = ESPWebBase::webPageStart(F("WeaterStation"));
   page += ESPWebBase::webPageScript(script);
   page += ESPWebBase::webPageBody();
   page += F("<h3>ESP8266</h3>\n\
@@ -394,6 +398,7 @@ void setup() {
 
 void loop() {
   app->loop();
+  //delay(100);
 }
 
 
