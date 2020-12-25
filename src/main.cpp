@@ -1,7 +1,35 @@
 #include <Arduino.h>
-
+#include "Adafruit_GFX.h"
+#include "Adafruit_ILI9341.h"
+#include <SoftwareSerial.h>
+// Комнатная метеостанция на ESP8266 с MQTT
+// Подключение к ESP8266-07:
+// -------------------------
+// ILI9341 SPI:
+// VCC		 ->	+3.3
+// GND		 ->	GND
+// CS		 ->	GPIO16
+// Reset	 ->	+3.3
+// DC		 ->	GPIO15
+// SDI/MOSI ->	GPIO13
+// SCK		 ->	GPIO14
+// LED		 ->	+3.3
+// SDO/MISO ->	not connected
+// -------------------------
+// BME280:
+// SDO - GND для установки адреса 0x76 (по умолчанию 0x77)
+// GND		 ->	GND
+// +3.3	 ->	+3.3
+// SDA		 ->	GPIO4
+// SCL		 ->	GPIO5
+// -------------------------
+// MH-Z19:
+// VCC		 ->	+5
+// GND		 ->	GND
+// TX		 ->	GPIO0 (RX)
+// RX		 ->	GPIO2 (TX)
+// -------------------------
 // China SL-TX583 WWW.HH.COM 433Mhz weather sensor decoder.
-
 // __           ___       ___    ___
 //   |         |  |      |  |   |  |
 //   |_________|  |______|  |___|  |
@@ -33,8 +61,59 @@ byte bit_Count = 0;                                       // Bit counter for rec
 unsigned long build_Buffer[] = {0,0};                     // Placeholder last data packet being received.
 volatile unsigned long read_Buffer[] = {0,0};             // Placeholder last full data packet read.
 volatile byte isrFlags = 0;   
+//----------------------------------------------------------------------------------------------------
+#define max_readings 120
 
+// ILI9341 hardware SPI (MOSI, SCK)
+#define TFT_DC 15
+#define TFT_CS 16
+Adafruit_ILI9341 tft = Adafruit_ILI9341(TFT_CS, TFT_DC);
 
+#define autoscale_on  true
+#define autoscale_off false
+#define barchart_on   true
+#define barchart_off  false
+
+float min_temp = 100, max_temp = -100, min_humi = 100, max_humi = -100;
+float min_bar = 1000, max_bar = -1000, min_co2 = 2000, max_co2 = -2000;
+
+float temp_readings[max_readings + 1] = {0};
+float humi_readings[max_readings + 1] = {0};
+float bar_readings[max_readings + 1] = {0};
+float co2_readings[max_readings + 1] = {0};
+int   reading = 1;
+
+// Значения цветов 16-bit:
+#define BLACK       0x0000
+#define BLUE        0x001F
+#define RED         0xF800
+#define GREEN       0x07E0
+#define CYAN        0x07FF
+#define YELLOW      0xFFE0
+#define WHITE       0xFFFF
+#define GREY        0x8410
+#define LBLUE       0x07FF
+#define LGREEN      0x87E0
+#define ORANGE      0xFC00
+#define LRED        0xF81F
+//----------------------------------------------------------------------------------------------------
+
+unsigned long currentTime;
+unsigned long loopTime;
+// CO2
+SoftwareSerial mySerial(0, 2); // RX, TX
+byte cmd[9] = {0xFF, 0x01, 0x86, 0x00, 0x00, 0x00, 0x00, 0x00, 0x79}; // команда запроса данных у MH-Z19 
+unsigned char response[9];	 // сюда пишем ответ MH-Z19
+unsigned int ppm = 0;		 // текущее значение уровня СО2
+
+// Сервер narodmon.ru
+const char* host = "narodmon.ru";
+const int httpPort = 8283;
+
+void get_temperature_and_humidity_and_bar();
+void get_co2();
+void DrawGraph(int x_pos, int y_pos, int width, int height, int Y1Max, String title, float DataArray[max_readings], boolean auto_scale, boolean barchart_mode, int graph_colour);
+String utf8rus(String source);
 /*
  * BMx280 VCC -> ESP8266 +3.3V, Gnd -> Gnd, SCL -> GPIO5 (D1), SDA -> GPIO4 (D2)
  */
@@ -85,6 +164,7 @@ private:
 #if defined(BME280)
   float humidity;
 #endif
+  float co2;  // показания MH-Z19
 };
 
 // Various flag bits
@@ -125,34 +205,8 @@ void ESPWeatherStation::loopExtra() {
   static uint32_t nextTime;
 
   ESPWebMQTTBase::loopExtra();
-  if (millis() >= nextTime) {
-    float temp_temperature = bm->readTemperature();
-    pressure = bm->readPressure() / 133.33;
-#if defined(BME280)
-    humidity = bm->readHumidity();
-#endif
- if (isnan(temperature) || (temperature != temp_temperature)) {
-    temperature = temp_temperature;
-    if (pubSubClient->connected()) {
-      String path, topic;
 
-      if (_mqttClient != strEmpty) {
-        path += charSlash;
-        path += _mqttClient;
-      }
-      path += charSlash;
-      topic = path + FPSTR(jsonTemperature);
-      mqttPublish(topic, String(temperature));
-      topic = path + FPSTR(jsonPressure);
-      mqttPublish(topic, String(pressure));
-#if defined(BME280)
-      topic = path + FPSTR(jsonHumidity);
-      mqttPublish(topic, String(humidity));
-#endif
-    }
- }
-    nextTime = millis() + timeout;
-//////////////////
+  // Read sensors 433 MHz
   unsigned long myData0 = 0;
   unsigned long myData1 = 0;
   if (bitRead(isrFlags,F_GOOD_DATA) == 1)
@@ -203,7 +257,255 @@ void ESPWeatherStation::loopExtra() {
     }
   }
 
+  if (millis() >= nextTime) {
+    float temp_temperature = bm->readTemperature();
+    float temp_pressure = bm->readPressure() / 133.33;
+#if defined(BME280)
+    float temp_humidity = bm->readHumidity();
+#endif
+ if (isnan(temperature) || (temperature != temp_temperature)) {
+    temperature = temp_temperature;
+    if (pubSubClient->connected()) {
+      String path, topic;
+
+      if (_mqttClient != strEmpty) {
+        path += charSlash;
+        path += _mqttClient;
+      }
+      path += charSlash;
+      topic = path + FPSTR(jsonTemperature);
+      mqttPublish(topic, String(temperature));
+    }
+ }
+  if (isnan(pressure) || (pressure != temp_pressure)) {
+    pressure = temp_pressure;
+    if (pubSubClient->connected()) {
+      String path, topic;
+
+      if (_mqttClient != strEmpty) {
+        path += charSlash;
+        path += _mqttClient;
+      }
+      path += charSlash;
+      topic = path + FPSTR(jsonPressure);
+      mqttPublish(topic, String(pressure));
+    }
+ }
+#if defined(BME280)  
+  if (isnan(humidity) || (humidity != temp_humidity)) {
+    humidity = temp_humidity;
+    if (pubSubClient->connected()) {
+      String path, topic;
+
+      if (_mqttClient != strEmpty) {
+        path += charSlash;
+        path += _mqttClient;
+      }
+      path += charSlash;
+      topic = path + FPSTR(jsonHumidity);
+      mqttPublish(topic, String(humidity));
+    }
+ }
+#endif
+  // MH-Z19
+  mySerial.write(cmd, 9); //Запрашиваем данные у MH-Z19
+  memset(response, 0, 9); //Чистим переменную от предыдущих значений
+  //delay(10);
+  mySerial.readBytes(response, 9); //Записываем свежий ответ от MH-Z19
+
+  unsigned int i;
+  byte crc = 0;//Ниже магия контрольной суммы
+  for (i = 1; i < 8; i++) crc += response[i];
+  crc = 255 - crc;
+  crc++;
+
+  //Проверяем контрольную сумму и если она не сходится - перезагружаем модуль
+  if ( !(response[0] == 0xFF && response[1] == 0x86 && response[8] == crc) ) {
+    Serial.println("CRC error: " + String(crc) + " / "+ String(response[8]));
+    while (mySerial.available()) {
+      mySerial.read();        
+    }
+  //ESP.restart();
+  }  
+
+  else {
+  unsigned int responseHigh = (unsigned int) response[2];
+  unsigned int responseLow = (unsigned int) response[3];
+  co2 = (256 * responseHigh) + responseLow; //responseLow - 380
   }
+
+  nextTime = millis() + timeout;
+
+  }
+
+  currentTime = millis();                           // считываем время, прошедшее с момента запуска программы
+  if(currentTime >= (loopTime + 360000)){           // сравниваем текущий таймер с переменной loopTime + 360 секунд
+  
+	  reading = reading + 1;
+	  if (reading > max_readings) { 
+		reading = max_readings;
+		for (int i = 1; i < max_readings; i++) {
+		  temp_readings[i] = temp_readings[i + 1];
+		  humi_readings[i] = humi_readings[i + 1];
+		  bar_readings[i] = bar_readings[i + 1];
+		  co2_readings[i] = co2_readings[i + 1];
+		}
+		temp_readings[reading] = temperature;
+		humi_readings[reading] = humidity;
+		bar_readings[reading] = pressure;
+		co2_readings[reading] = co2;
+	  } 
+	  
+	  loopTime = currentTime;                         
+
+	  /*Передача данных на сервер narodmon.ru*/
+		// Use WiFiClient class to create TCP connections
+		WiFiClient client;
+		
+		if (!client.connect(host, httpPort)) {
+		Serial.println("connection failed");
+		return;
+		}
+		
+		// отправляем данные  
+		Serial.println("Sending..."); 
+		// заголовок
+		client.print("#");
+		client.print(WiFi.macAddress()); // отправляем МАС нашей ESP8266
+		client.print("\n");
+	   
+		// отправляем данные 
+		client.print("#temp#");  // название датчика
+		client.print(temperature);
+		client.print("\n");
+		client.print("#humi#");
+		client.print(humidity);
+		client.print("\n");
+		client.print("#bar#");
+		client.print(pressure+680);
+		client.print("\n");
+		client.print("#co2#");
+		client.print(co2+380);
+		client.println("\n##");
+
+		// читаем ответ с и отправляем его в сериал
+		Serial.print("Requesting: ");  
+		while(client.available()){
+		String line = client.readStringUntil('\r');
+		Serial.print(line); // хотя это можно убрать
+		}
+		
+		client.stop();
+	  
+  }
+  //tft.fillRect(80, 160, 30, 320, BLACK);
+  // вывод температуры
+  tft.setTextSize(2);
+  tft.setTextColor(RED);
+  tft.fillRect(3, 30, 80, 20, BLACK);
+  tft.setCursor(3, 30);
+  tft.print(temperature, 1);
+  tft.print(char(0xB0));            //Deg-C symbol
+  tft.print("C");
+  
+  // вывод влажности
+  tft.setTextColor(LBLUE);
+  tft.fillRect(3, 110, 80, 20, BLACK);
+  tft.setCursor(3, 110);
+  tft.print(humidity, 1);
+  tft.print("%");
+  
+  temp_readings[reading] = temperature;
+  humi_readings[reading] = humidity;
+  if (temperature > max_temp) max_temp = temperature;
+  if (temperature < min_temp) min_temp = temperature;
+  if (humidity    > max_humi) max_humi = humidity;
+  if (humidity    < min_humi) min_humi = humidity;
+  
+  tft.setTextSize(1);
+  
+  // max and min
+  tft.setTextColor(LRED);
+  tft.setCursor(6, 10);
+  tft.fillRect(6, 10, 80, 10, BLACK);
+  tft.print(max_temp, 1);
+  tft.print(char(0xB0));          // Deg-C symbol
+  tft.print("C max");
+  tft.setCursor(6, 90);
+  tft.fillRect(6, 90, 80, 10, BLACK);
+  tft.print(max_humi, 1);
+  tft.print("% max");
+  
+  tft.setTextColor(GREEN);
+  tft.setCursor(6, 55);
+  tft.fillRect(6, 55, 80, 10, BLACK);
+  tft.print(min_temp, 1);
+  tft.print(char(0xB0));          // Deg-C symbol
+  tft.print("C min");
+  tft.setCursor(6, 135);
+  tft.fillRect(6, 135, 80, 10, BLACK);
+  tft.print(min_humi, 1);
+  tft.print("% min");
+  
+  // Display temperature readings on graph
+  // DrawGraph(int x_pos, int y_pos, int width, int height, int Y1_Max, String title, float data_array1[max_readings], boolean auto_scale, boolean barchart_mode, int colour)
+  
+  DrawGraph(110, 10, 120, 50, 40, "Температура", temp_readings, autoscale_off,  barchart_on, RED);
+  DrawGraph(110, 90, 120, 50, 100, "Влажность",   humi_readings, autoscale_off, barchart_off,  LBLUE);
+
+  // вывод давления
+  tft.setTextSize(2);
+  tft.setTextColor(ORANGE);
+  tft.fillRect(3, 190, 80, 20, BLACK);
+  tft.setCursor(3, 190);
+  tft.print(pressure+680, 1);
+  tft.setTextSize(1);
+  tft.print("mmHg");
+
+  // вывод co2
+  tft.setTextSize(2);
+  tft.setTextColor(LGREEN);  
+  tft.fillRect(3, 270, 80, 20, BLACK);
+  tft.setCursor(3, 270);
+  tft.print((int)co2+380, 1);
+  tft.setTextSize(2);
+  tft.print("ppm");
+  
+  bar_readings[reading] = pressure;
+  co2_readings[reading] = co2;
+  if (pressure > max_bar) max_bar = pressure;
+  if (pressure < min_bar) min_bar = pressure;
+  if (co2    > max_co2) max_co2 = co2;
+  if (co2    < min_co2) min_co2 = co2;
+  
+  tft.setTextSize(1);
+  // max and min
+  tft.setTextColor(LRED);
+  tft.setCursor(6, 170);
+  tft.fillRect(6, 170, 80, 10, BLACK);
+  tft.print(max_bar+680, 1);
+  tft.print("mmHg max");
+  
+  tft.setCursor(6, 250);
+  tft.fillRect(6, 250, 80, 10, BLACK);
+  tft.print(max_co2+380, 1);
+  tft.print("ppm max");
+  
+  tft.setTextColor(GREEN);
+  tft.setCursor(6, 215);
+  tft.fillRect(6, 215, 80, 10, BLACK);
+  tft.print(min_bar+680, 1);
+  tft.print("mmHg min");
+  
+  tft.setCursor(6, 295);
+  tft.fillRect(6, 295, 80, 10, BLACK);
+  tft.print(min_co2+380, 1);
+  tft.print("ppm min");
+  tft.setTextColor(WHITE);
+ 
+  DrawGraph(110, 170, 120, 50, 80, "Давление", bar_readings, autoscale_off,  barchart_on, ORANGE);
+  DrawGraph(110, 250, 120, 50, 820, "CO2",   co2_readings, autoscale_off, barchart_on,  LGREEN);
+  
 }
 
 void ESPWeatherStation::handleRootPage() {
@@ -383,9 +685,157 @@ void ICACHE_RAM_ATTR PinChangeISR0(){                                     // Pin
   }
 }
 
+/* (C) D L BIRD
+*  This function will draw a graph on a TFT / LCD display, it requires an array that contrains the data to be graphed.
+*  The variable 'max_readings' determines the maximum number of data elements for each array. Call it with the following parametric data:
+*  x_pos - the x axis top-left position of the graph
+*  y_pos - the y-axis top-left position of the graph, e.g. 100, 200 would draw the graph 100 pixels along and 200 pixels down from the top-left of the screen
+*  width - the width of the graph in pixels
+*  height - height of the graph in pixels
+*  Y1_Max - sets the scale of plotted data, for example 5000 would scale all data to a Y-axis of 5000 maximum
+*  data_array1 is parsed by value, externally they can be called anything else, e.g. within the routine it is called data_array1, but externally could be temperature_readings
+*  auto_scale - a logical value (TRUE or FALSE) that switches the Y-axis autoscale On or Off
+*  barchart_on - a logical value (TRUE or FALSE) that switches the drawing mode between barhcart and line graph
+*  barchart_colour - a sets the title and graph plotting colour
+*  If called with Y!_Max value of 500 and the data never goes above 500, then autoscale will retain a 0-500 Y scale, if on, it will increase the scale to match the data to be displayed, and reduce it accordingly if required.
+*  auto_scale_major_tick, set to 1000 and autoscale with increment the scale in 1000 steps.
+*/
+void DrawGraph(int x_pos, int y_pos, int width, int height, int Y1Max, String title, float DataArray[max_readings], boolean auto_scale, boolean barchart_mode, int graph_colour) {
+#define auto_scale_major_tick 5 // Sets the autoscale increment, so axis steps up in units of e.g. 5
+#define yticks 5                // 5 y-axis division markers
+  int maxYscale = 0;
+  int y_text = 0;
+  if (auto_scale) {
+    for (int i = 1; i <= max_readings; i++ ) if (maxYscale <= DataArray[i]) maxYscale = DataArray[i];
+    maxYscale = ((maxYscale + auto_scale_major_tick + 2) / auto_scale_major_tick) * auto_scale_major_tick; // Auto scale the graph and round to the nearest value defined, default was Y1Max
+    if (maxYscale < Y1Max) Y1Max = maxYscale;
+  }
+  //Graph the received data contained in an array
+  // Draw the graph outline
+  tft.drawRect(x_pos, y_pos, width + 2, height + 3, WHITE);
+  tft.setTextSize(1);
+  tft.setTextColor(graph_colour);
+  tft.setCursor(x_pos + (width - title.length() * 3) / 2, y_pos - 10); // 12 pixels per char assumed at size 2 (10+2 pixels)
+  tft.print(utf8rus(title));
+  tft.setTextSize(1);
+  // Draw the data
+  int x1, y1, x2, y2;
+  for (int gx = 1; gx <= max_readings; gx++) {
+    if (DataArray[gx] > 0) {
+      x1 = x_pos + gx * width / max_readings;
+      y1 = y_pos + height;
+      x2 = x_pos + gx * width / max_readings; // max_readings is the global variable that sets the maximum data that can be plotted
+      y2 = y_pos + height - constrain(DataArray[gx], 0, Y1Max) * height / Y1Max + 2;
+      if (barchart_mode) {
+        tft.drawFastVLine(x1, y1-height+1, height-1, BLACK);
+        tft.drawLine(x1, y2, x2, y1, graph_colour);
+
+      } else {
+        tft.drawFastVLine(x1, y1-height+1, height-1, BLACK);
+        tft.drawPixel(x2, y2, graph_colour);
+        tft.drawPixel(x2, y2 - 1, graph_colour); // Make the line a double pixel height to emphasise it, -1 makes the graph data go up!
+      }
+    }
+  }
+
+  //Draw the Y-axis scale
+  for (int spacing = 0; spacing <= yticks; spacing++) {
+    if (!barchart_mode) {
+
+  #define number_of_dashes 40
+  
+      for (int j = 0; j < number_of_dashes; j++) { // Draw dashed graph grid lines
+        if (spacing < yticks) tft.drawFastHLine((x_pos + 1 + j * width / number_of_dashes), y_pos + (height * spacing / yticks), width / (2 * number_of_dashes), WHITE);
+      }    }
+    if (title=="Давление"){
+      y_text = (Y1Max - Y1Max / yticks * spacing)+680;
+      }
+      else if(title=="CO2"){
+      y_text = (Y1Max - Y1Max / yticks * spacing)+380;
+      }
+      else {
+        y_text = Y1Max - Y1Max / yticks * spacing;
+      }
+    tft.setTextColor(YELLOW);
+    
+    String y_text_s = (String)y_text;
+    int y_text_d = y_text_s.length();
+    tft.setCursor((x_pos - (5*y_text_d))-5, y_pos + height * spacing / yticks - 4);
+    tft.print(y_text);
+  }
+  tft.setTextColor(WHITE);
+  int x=0;
+  for (int t = 0; t <= 10; t++) {
+      x+=10;
+      tft.setCursor((x_pos - 12)+x, y_pos+58);
+      tft.print(t);
+  }
+  tft.setCursor(225, y_pos+58);
+  tft.print("12");
+ 
+  if (barchart_mode) {
+    for (int vl = 10; vl <= max_readings; vl += 10) {
+      tft.drawFastVLine((x_pos + vl), y_pos + 2, height, GREY);
+    }
+
+  }
+
+}
+
+/* Recode russian fonts from UTF-8 to Windows-1251 */
+String utf8rus(String source)
+{
+  int i,k;
+  String target;
+  unsigned char n;
+  char m[2] = { '0', '\0' };
+
+  k = source.length(); i = 0;
+
+  while (i < k) {
+    n = source[i]; i++;
+
+    if (n >= 0xC0) {
+      switch (n) {
+        case 0xD0: {
+          n = source[i]; i++;
+          if (n == 0x81) { n = 0xA8; break; }
+          if (n >= 0x90 && n <= 0xBF) n = n + 0x30;
+          break;
+        }
+        case 0xD1: {
+          n = source[i]; i++;
+          if (n == 0x91) { n = 0xB8; break; }
+          if (n >= 0x80 && n <= 0x8F) n = n + 0x70;
+          break;
+        }
+      }
+    }
+    m[0] = n; target = target + String(m);
+  }
+return target;
+}
+
 void setup() {
   Serial.begin(115200);
   pinMode(data433Pin, INPUT);
+
+  mySerial.begin(9600);
+  tft.begin(); 				// Подключаем TFT экран
+  tft.cp437(true);			// Включаем поддержку RusFont
+  tft.setRotation(2);
+  tft.setTextSize(2);
+  tft.setTextColor(WHITE);
+  tft.fillScreen(BLACK);   	// Очистка экрана
+  analogWriteFreq(500);    	// Яркость TFT экрана
+
+  for (int x = 0; x <= max_readings; x++) {
+    temp_readings[x] = 0;
+    humi_readings[x] = 0;
+    bar_readings[x] = 0;
+    co2_readings[x] = 0;
+  } // Очистка масива показаний датчиков
+
   Serial.print(F("ISR Pin "));
   Serial.print(data433Pin);
   Serial.println(F(" Configured For Input."));

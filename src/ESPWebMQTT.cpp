@@ -222,7 +222,7 @@ void ESPWebMQTTBase::mqttCallback(char* topic, byte* payload, unsigned int lengt
   Serial.print(F("MQTT message arrived ["));
   Serial.print(topic);
   Serial.print(F("] "));
-  for (int i = 0; i < length; i++) {
+  for (unsigned int i = 0; i < length; i++) {
     Serial.print((char)payload[i]);
   }
   Serial.println();
