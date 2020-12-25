@@ -141,7 +141,7 @@ const char* const jsonPressure PROGMEM = "pressure";
 #if defined(BME280)
 const char* const jsonHumidity PROGMEM = "humidity";
 #endif
-const char* const jsonTestString PROGMEM = "teststring";
+const char* const jsonCO2 PROGMEM = "co2";
 
 class ESPWeatherStation : public ESPWebMQTTBase {
 public:
@@ -165,6 +165,7 @@ private:
   float humidity;
 #endif
   float co2;  // показания MH-Z19
+  float co2mqtt;
 };
 
 // Various flag bits
@@ -308,6 +309,7 @@ void ESPWeatherStation::loopExtra() {
  }
 #endif
   // MH-Z19
+  
   mySerial.write(cmd, 9); //Запрашиваем данные у MH-Z19
   memset(response, 0, 9); //Чистим переменную от предыдущих значений
   //delay(10);
@@ -329,10 +331,26 @@ void ESPWeatherStation::loopExtra() {
   }  
 
   else {
+
   unsigned int responseHigh = (unsigned int) response[2];
   unsigned int responseLow = (unsigned int) response[3];
   co2 = (256 * responseHigh) + responseLow; //responseLow - 380
   }
+  float temp_co2 = co2;
+  if (isnan(co2mqtt) || (co2mqtt != temp_co2)) {
+    co2mqtt = temp_co2;
+    if (pubSubClient->connected()) {
+      String path, topic;
+
+      if (_mqttClient != strEmpty) {
+        path += charSlash;
+        path += _mqttClient;
+      }
+      path += charSlash;
+      topic = path + FPSTR(jsonCO2);
+      mqttPublish(topic, String(co2mqtt));
+    }
+ }
 
   nextTime = millis() + timeout;
 
