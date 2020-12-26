@@ -2,6 +2,8 @@
 #include "Adafruit_GFX.h"
 #include "Adafruit_ILI9341.h"
 #include <SoftwareSerial.h>
+#include <Adafruit_BME280.h>
+#include "ESPWebMQTT.h"
 // Комнатная метеостанция на ESP8266 с MQTT
 // Подключение к ESP8266-07:
 // -------------------------
@@ -37,7 +39,7 @@
 //   |  Sync      |    1    |  0   |
 //   |  9000us    | 4250us  | 1750us
 // Defines
-const int data433Pin = 4;
+const int data433Pin = 10;
 #define DataBits0 4                                       // Number of data0 bits to expect
 #define DataBits1 32                                      // Number of data1 bits to expect
 #define allDataBits 36                                    // Number of data sum 0+1 bits to expect
@@ -110,38 +112,21 @@ unsigned int ppm = 0;		 // текущее значение уровня СО2
 const char* host = "narodmon.ru";
 const int httpPort = 8283;
 
-void get_temperature_and_humidity_and_bar();
-void get_co2();
 void DrawGraph(int x_pos, int y_pos, int width, int height, int Y1Max, String title, float DataArray[max_readings], boolean auto_scale, boolean barchart_mode, int graph_colour);
 String utf8rus(String source);
-/*
- * BMx280 VCC -> ESP8266 +3.3V, Gnd -> Gnd, SCL -> GPIO5 (D1), SDA -> GPIO4 (D2)
- */
-
-//#define BMP085 // for BMP180
-//#define BMP280
-#define BME280
-
-#if (defined(BMP085) && defined(BMP280)) || (defined(BMP085) && defined(BME280)) || (defined(BMP280) && defined(BME280))
-#error "Please select only one target sensor!"
-#endif
-
-#include <Wire.h>
-#if defined(BMP085)
-#include <Adafruit_BMP085.h>
-#elif defined(BMP280)
-#include <Adafruit_BMP280.h>
-#else
-#include <Adafruit_BME280.h>
-#endif
-#include "ESPWebMQTT.h"
 
 const char* const jsonTemperature PROGMEM = "temperature";
 const char* const jsonPressure PROGMEM = "pressure";
-#if defined(BME280)
 const char* const jsonHumidity PROGMEM = "humidity";
-#endif
 const char* const jsonCO2 PROGMEM = "co2";
+const char* const jsonTemp1 PROGMEM = "temp1";
+const char* const jsonTemp2 PROGMEM = "temp2";
+const char* const jsonTemp3 PROGMEM = "temp3";
+const char* const jsonHum1 PROGMEM = "hum1";
+const char* const jsonHum2 PROGMEM = "hum2";
+const char* const jsonHum3 PROGMEM = "hum3";
+
+Adafruit_BME280 bme; 
 
 class ESPWeatherStation : public ESPWebMQTTBase {
 public:
@@ -152,20 +137,13 @@ protected:
   void handleRootPage();
   String jsonData();
 private:
-#if defined(BMP085)
-  Adafruit_BMP085* bm;
-#elif defined(BMP280)
-  Adafruit_BMP280* bm;
-#else
-  Adafruit_BME280* bm;
-#endif
   float temperature;
   float pressure;
-#if defined(BME280)
   float humidity;
-#endif
-  float co2;  // показания MH-Z19
+  float co2;
   float co2mqtt;
+  float temp1, temp2, temp3;
+  int hum1, hum2, hum3;
 };
 
 // Various flag bits
@@ -184,21 +162,17 @@ void dec2binLong(unsigned long myNum, byte NumberOfBits) {
 /*
  * ESPWeatherStation class implementation
  */
-
 ESPWeatherStation::ESPWeatherStation() : ESPWebMQTTBase() {
-#if defined(BMP085)
-  bm = new Adafruit_BMP085();
-#elif defined(BMP280)
-  bm = new Adafruit_BMP280(); // I2C
-#else
-  bm = new Adafruit_BME280(); // I2C
-#endif
+
 }
 
 void ESPWeatherStation::setupExtra() {
   ESPWebMQTTBase::setupExtra();
-  bm->begin();
-
+  bool status = bme.begin();
+  if (!status) {
+      Serial.println("Error read BME280 sensor!");
+      while (1);
+  }
 }
 
 void ESPWeatherStation::loopExtra() {
@@ -240,7 +214,7 @@ void ESPWeatherStation::loopExtra() {
     byte H = (myData1 >> 0) & 0xFF;       // Get LLLL
     Serial.print(H);
     Serial.println("%");
-
+    
     if (pubSubClient->connected() && ID != 0 ) {
       String path, topic;
 
@@ -256,104 +230,118 @@ void ESPWeatherStation::loopExtra() {
       topic = path + FPSTR(jsonHumidity);
       mqttPublish(topic, String(H));
     }
+    if (CH == 1) {
+      temp1 = Temperarure/10.0;
+      hum1 = H;
+    }
+    if (CH == 2) {
+      temp2 = Temperarure/10.0;
+      hum2 = H;
+    }
+    if (CH == 3) {
+      temp3 = Temperarure/10.0;
+      hum3 = H;
+    }
   }
-
-  if (millis() >= nextTime) {
-    float temp_temperature = bm->readTemperature();
-    float temp_pressure = bm->readPressure() / 133.33;
-#if defined(BME280)
-    float temp_humidity = bm->readHumidity();
-#endif
- if (isnan(temperature) || (temperature != temp_temperature)) {
-    temperature = temp_temperature;
-    if (pubSubClient->connected()) {
-      String path, topic;
-
-      if (_mqttClient != strEmpty) {
-        path += charSlash;
-        path += _mqttClient;
-      }
-      path += charSlash;
-      topic = path + FPSTR(jsonTemperature);
-      mqttPublish(topic, String(temperature));
-    }
- }
-  if (isnan(pressure) || (pressure != temp_pressure)) {
-    pressure = temp_pressure;
-    if (pubSubClient->connected()) {
-      String path, topic;
-
-      if (_mqttClient != strEmpty) {
-        path += charSlash;
-        path += _mqttClient;
-      }
-      path += charSlash;
-      topic = path + FPSTR(jsonPressure);
-      mqttPublish(topic, String(pressure));
-    }
- }
-#if defined(BME280)  
-  if (isnan(humidity) || (humidity != temp_humidity)) {
-    humidity = temp_humidity;
-    if (pubSubClient->connected()) {
-      String path, topic;
-
-      if (_mqttClient != strEmpty) {
-        path += charSlash;
-        path += _mqttClient;
-      }
-      path += charSlash;
-      topic = path + FPSTR(jsonHumidity);
-      mqttPublish(topic, String(humidity));
-    }
- }
-#endif
-  // MH-Z19
+  delay(100);
   
-  mySerial.write(cmd, 9); //Запрашиваем данные у MH-Z19
-  memset(response, 0, 9); //Чистим переменную от предыдущих значений
-  //delay(10);
-  mySerial.readBytes(response, 9); //Записываем свежий ответ от MH-Z19
+  if (millis() >= nextTime) {
 
-  unsigned int i;
-  byte crc = 0;//Ниже магия контрольной суммы
-  for (i = 1; i < 8; i++) crc += response[i];
-  crc = 255 - crc;
-  crc++;
+  float temp_temperature = bme.readTemperature() ; 
+  float temp_humidity    = bme.readHumidity(); 
+  float temp_pressure    = (bme.readPressure() / 100.0F)*0.7500617 - 680;
 
-  //Проверяем контрольную сумму и если она не сходится - перезагружаем модуль
-  if ( !(response[0] == 0xFF && response[1] == 0x86 && response[8] == crc) ) {
-    Serial.println("CRC error: " + String(crc) + " / "+ String(response[8]));
-    while (mySerial.available()) {
-      mySerial.read();        
-    }
-  //ESP.restart();
-  }  
-
-  else {
-
-  unsigned int responseHigh = (unsigned int) response[2];
-  unsigned int responseLow = (unsigned int) response[3];
-  co2 = (256 * responseHigh) + responseLow; //responseLow - 380
+  if (isnan(temp_humidity) || isnan(temp_temperature) || isnan(temp_pressure)) {
+    Serial.println("Failed to read from BME280 sensor!");
+    return;
   }
-  float temp_co2 = co2;
-  if (isnan(co2mqtt) || (co2mqtt != temp_co2)) {
-    co2mqtt = temp_co2;
-    if (pubSubClient->connected()) {
-      String path, topic;
 
-      if (_mqttClient != strEmpty) {
-        path += charSlash;
-        path += _mqttClient;
-      }
-      path += charSlash;
-      topic = path + FPSTR(jsonCO2);
-      mqttPublish(topic, String(co2mqtt));
+    if (isnan(temperature) || (temperature != temp_temperature)) {
+        temperature = temp_temperature;
+        if (pubSubClient->connected()) {
+          String path, topic;
+
+          if (_mqttClient != strEmpty) {
+            path += charSlash;
+            path += _mqttClient;
+          }
+          path += charSlash;
+          topic = path + FPSTR(jsonTemperature);
+          mqttPublish(topic, String(temperature));
+        }
     }
- }
+    if (isnan(pressure) || (pressure != temp_pressure)) {
+      pressure = temp_pressure;
+      if (pubSubClient->connected()) {
+        String path, topic;
 
-  nextTime = millis() + timeout;
+        if (_mqttClient != strEmpty) {
+          path += charSlash;
+          path += _mqttClient;
+        }
+        path += charSlash;
+        topic = path + FPSTR(jsonPressure);
+        mqttPublish(topic, String(pressure+680));
+      }
+    }
+    if (isnan(humidity) || (humidity != temp_humidity)) {
+      humidity = temp_humidity;
+      if (pubSubClient->connected()) {
+        String path, topic;
 
+        if (_mqttClient != strEmpty) {
+          path += charSlash;
+          path += _mqttClient;
+        }
+        path += charSlash;
+        topic = path + FPSTR(jsonHumidity);
+        mqttPublish(topic, String(humidity));
+      }
+    }
+    
+    //MH-Z19
+    mySerial.write(cmd, 9); //Запрашиваем данные у MH-Z19
+    memset(response, 0, 9); //Чистим переменную от предыдущих значений
+    //delay(10);
+    mySerial.readBytes(response, 9); //Записываем свежий ответ от MH-Z19
+
+    unsigned int i;
+    byte crc = 0;//Ниже магия контрольной суммы
+    for (i = 1; i < 8; i++) crc += response[i];
+    crc = 255 - crc;
+    crc++;
+
+    //Проверяем контрольную сумму и если она не сходится - перезагружаем модуль
+    if ( !(response[0] == 0xFF && response[1] == 0x86 && response[8] == crc) ) {
+      Serial.println("CRC error: " + String(crc) + " / "+ String(response[8]));
+      while (mySerial.available()) {
+        mySerial.read();        
+      }
+    //ESP.restart();
+    }  
+
+    else {
+    unsigned int responseHigh = (unsigned int) response[2];
+    unsigned int responseLow = (unsigned int) response[3];
+    co2 = (256 * responseHigh) + responseLow; //responseLow - 380
+    }
+    float temp_co2 = co2;
+    if (isnan(co2mqtt) || (co2mqtt != temp_co2)) {
+      co2mqtt = temp_co2;
+      if (pubSubClient->connected()) {
+        String path, topic;
+
+        if (_mqttClient != strEmpty) {
+          path += charSlash;
+          path += _mqttClient;
+        }
+        path += charSlash;
+        topic = path + FPSTR(jsonCO2);
+        mqttPublish(topic, String(co2mqtt));
+      }
+    }
+
+    nextTime = millis() + timeout;
   }
 
   currentTime = millis();                           // считываем время, прошедшее с момента запуска программы
@@ -555,13 +543,42 @@ document.getElementById('");
   script += F("').innerHTML = data.");
   script += FPSTR(jsonPressure);
   script += F(";\n");
-#if defined(BME280)
   script += F("document.getElementById('");
   script += FPSTR(jsonHumidity);
   script += F("').innerHTML = data.");
   script += FPSTR(jsonHumidity);
   script += F(";\n");
-#endif
+  script += F("document.getElementById('");
+  script += FPSTR(jsonTemp1);
+  script += F("').innerHTML = data.");
+  script += FPSTR(jsonTemp1);
+  script += F(";\n");
+  script += F("document.getElementById('");
+  script += FPSTR(jsonHum1);
+  script += F("').innerHTML = data.");
+  script += FPSTR(jsonHum1);
+  script += F(";\n");
+  script += F("document.getElementById('");
+  script += FPSTR(jsonTemp2);
+  script += F("').innerHTML = data.");
+  script += FPSTR(jsonTemp2);
+  script += F(";\n");
+  script += F("document.getElementById('");
+  script += FPSTR(jsonHum2);
+  script += F("').innerHTML = data.");
+  script += FPSTR(jsonHum2);
+  script += F(";\n");
+  script += F("document.getElementById('");
+  script += FPSTR(jsonTemp3);
+  script += F("').innerHTML = data.");
+  script += FPSTR(jsonTemp3);
+  script += F(";\n");
+  script += F("document.getElementById('");
+  script += FPSTR(jsonHum3);
+  script += F("').innerHTML = data.");
+  script += FPSTR(jsonHum3);
+  script += F(";\n");
+
   script += F("}\n\
 }\n\
 request.send(null);\n\
@@ -585,11 +602,32 @@ Temperature: <span id=\"");
 Pressure: <span id=\"");
   page += FPSTR(jsonPressure);
   page += F("\">0</span> mmHg<br/>\n");
-#if defined(BME280)
   page += F("Humidity: <span id=\"");
   page += FPSTR(jsonHumidity);
   page += F("\">0</span> %<br/>\n");
-#endif
+  
+  page += F("Wireless Temp CH1: <span id=\"");
+  page += FPSTR(jsonTemp1);
+  page += F("\">0</span> C<br/>\n");
+  page += F("Wireless Humidity CH1: <span id=\"");
+  page += FPSTR(jsonHum1);
+  page += F("\">0</span> %<br/>\n");
+
+  page += F("Wireless Temp CH2: <span id=\"");
+  page += FPSTR(jsonTemp2);
+  page += F("\">0</span> C<br/>\n");
+  page += F("Wireless Humidity CH2: <span id=\"");
+  page += FPSTR(jsonHum2);
+  page += F("\">0</span> %<br/>\n");
+
+  page += F("Wireless Temp CH3: <span id=\"");
+  page += FPSTR(jsonTemp3);
+  page += F("\">0</span> C<br/>\n");
+  page += F("Wireless Humidity CH3: <span id=\"");
+  page += FPSTR(jsonHum3);
+  page += F("\">0</span> %<br/>\n");
+
+
   page += F("</p>\n");
   page += navigator();
   page += ESPWebBase::webPageEnd();
@@ -606,13 +644,35 @@ String ESPWeatherStation::jsonData() {
   result += F(",\"");
   result += FPSTR(jsonPressure);
   result += F("\":");
-  result += String(pressure);
-#if defined(BME280)
+  result += String(pressure+680);
   result += F(",\"");
   result += FPSTR(jsonHumidity);
   result += F("\":");
   result += String(humidity);
-#endif
+  result += F(",\"");
+  result += FPSTR(jsonTemp1);
+  result += F("\":");
+  result += String(temp1);
+  result += F(",\"");
+  result += FPSTR(jsonHum1);
+  result += F("\":");
+  result += String(hum1);
+  result += F(",\"");
+  result += FPSTR(jsonTemp2);
+  result += F("\":");
+  result += String(temp2);
+  result += F(",\"");
+  result += FPSTR(jsonHum2);
+  result += F("\":");
+  result += String(hum2);
+  result += F(",\"");
+  result += FPSTR(jsonTemp3);
+  result += F("\":");
+  result += String(temp3);
+  result += F(",\"");
+  result += FPSTR(jsonHum3);
+  result += F("\":");
+  result += String(hum3);
 
   return result;
 }
@@ -795,7 +855,6 @@ void DrawGraph(int x_pos, int y_pos, int width, int height, int Y1Max, String ti
     for (int vl = 10; vl <= max_readings; vl += 10) {
       tft.drawFastVLine((x_pos + vl), y_pos + 2, height, GREY);
     }
-
   }
 
 }
