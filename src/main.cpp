@@ -247,9 +247,9 @@ void ESPWeatherStation::loopExtra() {
   
   if (millis() >= nextTime) {
 
-  float temp_temperature = bme.readTemperature() ; 
-  float temp_humidity    = bme.readHumidity(); 
-  float temp_pressure    = (bme.readPressure() / 100.0F)*0.7500617 - 680;
+  float temp_temperature = (rint(bme.readTemperature()*10))/10; 
+  float temp_humidity    = rint(bme.readHumidity()); 
+  float temp_pressure    = rint((bme.readPressure() / 100.0F)*0.7500617) - 680; 
 
   if (isnan(temp_humidity) || isnan(temp_temperature) || isnan(temp_pressure)) {
     Serial.println("Failed to read from BME280 sensor!");
@@ -323,7 +323,7 @@ void ESPWeatherStation::loopExtra() {
     else {
     unsigned int responseHigh = (unsigned int) response[2];
     unsigned int responseLow = (unsigned int) response[3];
-    co2 = (256 * responseHigh) + responseLow; //responseLow - 380
+    co2 = (256 * responseHigh) + responseLow;  //responseLow - 380
     }
     float temp_co2 = co2;
     if (isnan(co2mqtt) || (co2mqtt != temp_co2)) {
@@ -547,6 +547,11 @@ document.getElementById('");
   script += FPSTR(jsonHumidity);
   script += F("').innerHTML = data.");
   script += FPSTR(jsonHumidity);
+   script += F(";\n");
+  script += F("document.getElementById('");
+  script += FPSTR(jsonCO2);
+  script += F("').innerHTML = data.");
+  script += FPSTR(jsonCO2);
   script += F(";\n");
   script += F("document.getElementById('");
   script += FPSTR(jsonTemp1);
@@ -605,6 +610,10 @@ Pressure: <span id=\"");
   page += F("Humidity: <span id=\"");
   page += FPSTR(jsonHumidity);
   page += F("\">0</span> %<br/>\n");
+
+  page += F("CO2: <span id=\"");
+  page += FPSTR(jsonCO2);
+  page += F("\">0</span> ppm<br/>\n");
   
   page += F("Wireless Temp CH1: <span id=\"");
   page += FPSTR(jsonTemp1);
@@ -649,6 +658,10 @@ String ESPWeatherStation::jsonData() {
   result += FPSTR(jsonHumidity);
   result += F("\":");
   result += String(humidity);
+  result += F(",\"");
+  result += FPSTR(jsonCO2);
+  result += F("\":");
+  result += String(co2);
   result += F(",\"");
   result += FPSTR(jsonTemp1);
   result += F("\":");
