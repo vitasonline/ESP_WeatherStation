@@ -337,73 +337,12 @@ void ESPWeatherStation::loopExtra() {
         }
         path += charSlash;
         topic = path + FPSTR(jsonCO2);
-        mqttPublish(topic, String(co2mqtt));
+        mqttPublish(topic, String(co2mqtt+380));
       }
     }
 
     nextTime = millis() + timeout;
-  }
-
-  currentTime = millis();                           // считываем время, прошедшее с момента запуска программы
-  if(currentTime >= (loopTime + 360000)){           // сравниваем текущий таймер с переменной loopTime + 360 секунд
   
-	  reading = reading + 1;
-	  if (reading > max_readings) { 
-		reading = max_readings;
-		for (int i = 1; i < max_readings; i++) {
-		  temp_readings[i] = temp_readings[i + 1];
-		  humi_readings[i] = humi_readings[i + 1];
-		  bar_readings[i] = bar_readings[i + 1];
-		  co2_readings[i] = co2_readings[i + 1];
-		}
-		temp_readings[reading] = temperature;
-		humi_readings[reading] = humidity;
-		bar_readings[reading] = pressure;
-		co2_readings[reading] = co2;
-	  } 
-	  
-	  loopTime = currentTime;                         
-
-	  /*Передача данных на сервер narodmon.ru*/
-		// Use WiFiClient class to create TCP connections
-		WiFiClient client;
-		
-		if (!client.connect(host, httpPort)) {
-		Serial.println("connection failed");
-		return;
-		}
-		
-		// отправляем данные  
-		Serial.println("Sending..."); 
-		// заголовок
-		client.print("#");
-		client.print(WiFi.macAddress()); // отправляем МАС нашей ESP8266
-		client.print("\n");
-	   
-		// отправляем данные 
-		client.print("#temp#");  // название датчика
-		client.print(temperature);
-		client.print("\n");
-		client.print("#humi#");
-		client.print(humidity);
-		client.print("\n");
-		client.print("#bar#");
-		client.print(pressure+680);
-		client.print("\n");
-		client.print("#co2#");
-		client.print(co2+380);
-		client.println("\n##");
-
-		// читаем ответ с и отправляем его в сериал
-		Serial.print("Requesting: ");  
-		while(client.available()){
-		String line = client.readStringUntil('\r');
-		Serial.print(line); // хотя это можно убрать
-		}
-		
-		client.stop();
-	  
-  }
   //tft.fillRect(80, 160, 30, 320, BLACK);
   // вывод температуры
   tft.setTextSize(2);
@@ -511,6 +450,68 @@ void ESPWeatherStation::loopExtra() {
  
   DrawGraph(110, 170, 120, 50, 80, "Давление", bar_readings, autoscale_off,  barchart_on, ORANGE);
   DrawGraph(110, 250, 120, 50, 820, "CO2",   co2_readings, autoscale_off, barchart_on,  LGREEN);
+
+  }
+  
+  currentTime = millis();                           // считываем время, прошедшее с момента запуска программы
+  if(currentTime >= (loopTime + 360000)){           // сравниваем текущий таймер с переменной loopTime + 360 секунд
+  
+	  reading = reading + 1;
+	  if (reading > max_readings) { 
+		reading = max_readings;
+		for (int i = 1; i < max_readings; i++) {
+		  temp_readings[i] = temp_readings[i + 1];
+		  humi_readings[i] = humi_readings[i + 1];
+		  bar_readings[i] = bar_readings[i + 1];
+		  co2_readings[i] = co2_readings[i + 1];
+		}
+		temp_readings[reading] = temperature;
+		humi_readings[reading] = humidity;
+		bar_readings[reading] = pressure;
+		co2_readings[reading] = co2;
+	  } 
+	  
+	  loopTime = currentTime;                         
+
+	  /*Передача данных на сервер narodmon.ru*/
+		// Use WiFiClient class to create TCP connections
+		WiFiClient client;
+		
+		if (!client.connect(host, httpPort)) {
+		Serial.println("connection failed");
+		return;
+		}
+		
+		// отправляем данные  
+		Serial.println("Sending..."); 
+		// заголовок
+		client.print("#");
+		client.print(WiFi.macAddress()); // отправляем МАС нашей ESP8266
+		client.print("\n");
+	   
+		// отправляем данные 
+		client.print("#temp#");  // название датчика
+		client.print(temperature);
+		client.print("\n");
+		client.print("#humi#");
+		client.print(humidity);
+		client.print("\n");
+		client.print("#bar#");
+		client.print(pressure+680);
+		client.print("\n");
+		client.print("#co2#");
+		client.print(co2+380);
+		client.println("\n##");
+
+		// читаем ответ с и отправляем его в сериал
+		Serial.print("Requesting: ");  
+		while(client.available()){
+		String line = client.readStringUntil('\r');
+		Serial.print(line); // хотя это можно убрать
+		}
+		
+		client.stop();
+  }
   
 }
 
