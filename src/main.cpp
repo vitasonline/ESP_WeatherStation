@@ -176,7 +176,7 @@ void ESPWeatherStation::setupExtra() {
 }
 
 void ESPWeatherStation::loopExtra() {
-  const uint32_t timeout = 2000; // 2 sec.
+  const uint32_t timeout = 5000; // 5 sec.
   static uint32_t nextTime;
 
   ESPWebMQTTBase::loopExtra();
@@ -662,7 +662,7 @@ String ESPWeatherStation::jsonData() {
   result += F(",\"");
   result += FPSTR(jsonCO2);
   result += F("\":");
-  result += String(co2);
+  result += String(co2+380);
   result += F(",\"");
   result += FPSTR(jsonTemp1);
   result += F("\":");
